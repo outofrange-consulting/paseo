@@ -1,17 +1,17 @@
 import { fileURLToPath } from "url";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import {
-  acquirePidLock,
-  PidLockError,
-  releasePidLock,
-  updatePidLock,
-} from "../src/server/pid-lock.js";
+import { acquirePidLock, releasePidLock, updatePidLock } from "../src/server/pid-lock.js";
 import { resolvePaseoHome } from "../src/server/paseo-home.js";
 import { loadPersistedConfig } from "../src/server/persisted-config.js";
 import { runSupervisor } from "./supervisor.js";
 import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
 import { applySherpaLoaderEnv } from "../src/server/speech/providers/local/sherpa/sherpa-runtime-env.js";
+import {
+  acquireLockOrYieldToHealthyDaemon,
+  isProcessAlive,
+  sleep,
+} from "./acquire-daemon-lock.js";
 
 process.title = "Paseo Supervisor";
 
@@ -106,18 +106,12 @@ async function main(): Promise<void> {
   const persistedConfig = loadPersistedConfig(paseoHome);
   const supervisorLogFile = resolveSupervisorLogFile(paseoHome, persistedConfig, workerEnv);
 
-  try {
-    await acquirePidLock(paseoHome, null, {
-      ownerPid: process.pid,
-    });
-  } catch (error) {
-    if (error instanceof PidLockError) {
-      process.stderr.write(`${error.message}\n`);
-      process.exit(1);
-      return;
-    }
-    throw error;
-  }
+  await acquireLockOrYieldToHealthyDaemon(paseoHome, process.pid, {
+    acquire: (home, ownerPid) => acquirePidLock(home, null, { ownerPid }),
+    isAlive: isProcessAlive,
+    wait: sleep,
+    log: (message) => process.stderr.write(`${message}\n`),
+  });
 
   let lockReleased = false;
   const releaseLock = async (): Promise<void> => {
